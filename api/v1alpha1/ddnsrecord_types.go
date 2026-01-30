@@ -21,8 +21,9 @@ type DDNSRecordSpec struct {
 	Host string `json:"host"`
 
 	// IPVersion specifies which IP version to update
+	// ipv4_and_ipv6 creates two entries (one for each) since ddns-updater doesn't support both in one
 	// +kubebuilder:default="ipv4"
-	// +kubebuilder:validation:Enum=ipv4;ipv6;ipv4_or_ipv6
+	// +kubebuilder:validation:Enum=ipv4;ipv6;ipv4_or_ipv6;ipv4_and_ipv6
 	IPVersion string `json:"ipVersion,omitempty"`
 
 	// ProviderConfig contains provider-specific settings

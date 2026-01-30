@@ -65,11 +65,14 @@ spec:
                 type: string
               ipVersion:
                 default: ipv4
-                description: IPVersion specifies which IP version to update
+                description: |-
+                  IPVersion specifies which IP version to update
+                  ipv4_and_ipv6 creates two entries (one for each) since ddns-updater doesn't support both in one
                 enum:
                 - ipv4
                 - ipv6
                 - ipv4_or_ipv6
+                - ipv4_and_ipv6
                 type: string
               provider:
                 default: ovh

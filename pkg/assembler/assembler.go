@@ -68,11 +68,11 @@ func (a *Assembler) Assemble(ctx context.Context, records []connectivityv1alpha1
 	credCache := make(map[string]*corev1.Secret)
 
 	for _, record := range sortedRecords {
-		entry, err := a.buildEntry(ctx, &record, credCache)
+		entries, err := a.buildEntries(ctx, &record, credCache)
 		if err != nil {
 			return nil, err
 		}
-		result.Entries = append(result.Entries, entry)
+		result.Entries = append(result.Entries, entries...)
 	}
 
 	// Build JSON config
@@ -86,34 +86,51 @@ func (a *Assembler) Assemble(ctx context.Context, records []connectivityv1alpha1
 	return result, nil
 }
 
-// buildEntry builds a single DDNSEntry from a DDNSRecord
-func (a *Assembler) buildEntry(
+// buildEntries builds DDNSEntry(s) from a DDNSRecord
+// For ipv4_and_ipv6, it creates two entries since ddns-updater doesn't support both in one
+func (a *Assembler) buildEntries(
 	ctx context.Context,
 	record *connectivityv1alpha1.DDNSRecord,
 	credCache map[string]*corev1.Secret,
-) (DDNSEntry, error) {
+) ([]DDNSEntry, error) {
 	spec := &record.Spec
 
-	entry := DDNSEntry{
-		Provider:  spec.Provider,
-		Domain:    spec.Domain,
-		Host:      spec.Host,
-		Mode:      cmp.Or(spec.ProviderConfig.Mode, "api"),
-		IPVersion: cmp.Or(spec.IPVersion, "ipv4"),
-	}
-
 	// Resolve credentials based on provider
+	var creds *OVHCredentials
 	if spec.Provider == "ovh" {
-		creds, err := a.resolveOVHCredentials(ctx, record, credCache)
+		var err error
+		creds, err = a.resolveOVHCredentials(ctx, record, credCache)
 		if err != nil {
-			return DDNSEntry{}, err
+			return nil, err
 		}
-		entry.AppKey = creds.AppKey
-		entry.AppSecret = creds.AppSecret
-		entry.ConsumerKey = creds.ConsumerKey
 	}
 
-	return entry, nil
+	// Determine which IP versions to create entries for
+	ipVersions := []string{cmp.Or(spec.IPVersion, "ipv4")}
+	if spec.IPVersion == "ipv4_and_ipv6" {
+		ipVersions = []string{"ipv4", "ipv6"}
+	}
+
+	entries := make([]DDNSEntry, 0, len(ipVersions))
+	for _, ipVersion := range ipVersions {
+		entry := DDNSEntry{
+			Provider:  spec.Provider,
+			Domain:    spec.Domain,
+			Host:      spec.Host,
+			Mode:      cmp.Or(spec.ProviderConfig.Mode, "api"),
+			IPVersion: ipVersion,
+		}
+
+		if creds != nil {
+			entry.AppKey = creds.AppKey
+			entry.AppSecret = creds.AppSecret
+			entry.ConsumerKey = creds.ConsumerKey
+		}
+
+		entries = append(entries, entry)
+	}
+
+	return entries, nil
 }
 
 // OVHCredentials holds resolved OVH credentials

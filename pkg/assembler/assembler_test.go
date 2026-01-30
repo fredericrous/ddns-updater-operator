@@ -119,6 +119,97 @@ func TestAssembler_Assemble(t *testing.T) {
 	}
 }
 
+func TestAssembler_IPv4AndIPv6(t *testing.T) {
+	// Create test scheme
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = connectivityv1alpha1.AddToScheme(scheme)
+
+	// Create test secret
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "ddns-credentials",
+			Namespace: "ddns-updater",
+		},
+		Data: map[string][]byte{
+			"OVH_APPLICATION_KEY":    []byte("test-app-key"),
+			"OVH_APPLICATION_SECRET": []byte("test-app-secret"),
+			"OVH_CONSUMER_KEY":       []byte("test-consumer-key"),
+		},
+	}
+
+	// Create fake client with secret
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(secret).
+		Build()
+
+	// Create assembler
+	log := zap.New(zap.UseDevMode(true))
+	assembler := NewAssembler(client, log)
+
+	// Create test record with ipv4_and_ipv6
+	records := []connectivityv1alpha1.DDNSRecord{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "dual-stack",
+				Namespace: "ddns-updater",
+			},
+			Spec: connectivityv1alpha1.DDNSRecordSpec{
+				Provider:  "ovh",
+				Domain:    "example.com",
+				Host:      "www",
+				IPVersion: "ipv4_and_ipv6",
+				ProviderConfig: connectivityv1alpha1.OVHProviderConfig{
+					Mode: "api",
+					CredentialsRef: connectivityv1alpha1.SecretReference{
+						Name:      "ddns-credentials",
+						Namespace: "ddns-updater",
+					},
+				},
+			},
+		},
+	}
+
+	// Run assembler
+	ctx := context.Background()
+	result, err := assembler.Assemble(ctx, records)
+	if err != nil {
+		t.Fatalf("Assemble() error = %v", err)
+	}
+
+	// Verify two entries created from one record
+	if len(result.Entries) != 2 {
+		t.Errorf("Expected 2 entries for ipv4_and_ipv6, got %d", len(result.Entries))
+	}
+
+	// Verify JSON structure
+	var config DDNSConfig
+	if err := json.Unmarshal([]byte(result.ConfigJSON), &config); err != nil {
+		t.Fatalf("Failed to unmarshal config JSON: %v", err)
+	}
+
+	if len(config.Settings) != 2 {
+		t.Errorf("Expected 2 settings, got %d", len(config.Settings))
+	}
+
+	// Verify one ipv4 and one ipv6 entry
+	ipVersions := make(map[string]bool)
+	for _, entry := range config.Settings {
+		ipVersions[entry.IPVersion] = true
+		if entry.Host != "www" {
+			t.Errorf("Expected host 'www', got '%s'", entry.Host)
+		}
+	}
+
+	if !ipVersions["ipv4"] {
+		t.Error("Expected ipv4 entry not found")
+	}
+	if !ipVersions["ipv6"] {
+		t.Error("Expected ipv6 entry not found")
+	}
+}
+
 func TestAssembler_MissingSecret(t *testing.T) {
 	// Create test scheme
 	scheme := runtime.NewScheme()
