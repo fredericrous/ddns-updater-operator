@@ -33,6 +33,7 @@ type DDNSEntry struct {
 	Host        string `json:"host"`
 	Mode        string `json:"mode,omitempty"`
 	IPVersion   string `json:"ip_version,omitempty"`
+	IPv6Suffix  string `json:"ipv6_suffix,omitempty"`
 	AppKey      string `json:"app_key,omitempty"`
 	AppSecret   string `json:"app_secret,omitempty"`
 	ConsumerKey string `json:"consumer_key,omitempty"`
@@ -119,6 +120,11 @@ func (a *Assembler) buildEntries(
 			Host:      spec.Host,
 			Mode:      cmp.Or(spec.ProviderConfig.Mode, "api"),
 			IPVersion: ipVersion,
+		}
+
+		// Add IPv6 suffix for IPv6 entries if specified
+		if ipVersion == "ipv6" && spec.IPv6Suffix != "" {
+			entry.IPv6Suffix = spec.IPv6Suffix
 		}
 
 		if creds != nil {

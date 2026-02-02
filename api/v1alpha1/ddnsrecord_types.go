@@ -26,6 +26,13 @@ type DDNSRecordSpec struct {
 	// +kubebuilder:validation:Enum=ipv4;ipv6;ipv4_or_ipv6;ipv4_and_ipv6
 	IPVersion string `json:"ipVersion,omitempty"`
 
+	// IPv6Suffix is the IPv6 interface identifier suffix to use instead of the auto-detected one.
+	// This is useful when the LoadBalancer has a static IPv6 suffix different from the node's SLAAC address.
+	// Format: "0:0:0:0:0:0:0:166/64" or "::166/64" for suffix 166 with /64 prefix
+	// If empty, the raw public IPv6 address obtained is used.
+	// +optional
+	IPv6Suffix string `json:"ipv6Suffix,omitempty"`
+
 	// ProviderConfig contains provider-specific settings
 	// +kubebuilder:validation:Required
 	ProviderConfig OVHProviderConfig `json:"providerConfig"`
