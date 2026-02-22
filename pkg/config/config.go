@@ -30,6 +30,30 @@ type OperatorConfig struct {
 
 	// DDNSConfigMapName is the name of the ddns-updater ConfigMap
 	DDNSConfigMapName string
+
+	// IPv6Enabled enables IPv6 auto-detection and ConfigMap maintenance
+	IPv6Enabled bool
+
+	// IPv6ConfigMapName is the target ConfigMap name for IPv6 data
+	IPv6ConfigMapName string
+
+	// IPv6ConfigMapNamespace is the namespace of the IPv6 ConfigMap
+	IPv6ConfigMapNamespace string
+
+	// IPv6SyncInterval is how often to check for IPv6 prefix changes
+	IPv6SyncInterval time.Duration
+
+	// IPv6Resolvers are external DNS resolvers to bypass CoreDNS split-horizon
+	IPv6Resolvers []string
+
+	// IPv6Overrides are manual overrides keyed by ConfigMap key name
+	IPv6Overrides map[string]IPv6Override
+}
+
+// IPv6Override allows manual specification of a server's domain and suffix
+type IPv6Override struct {
+	Domain string `json:"domain"`
+	Suffix string `json:"suffix"`
 }
 
 // NewDefaultConfig creates a default configuration
@@ -43,6 +67,10 @@ func NewDefaultConfig() *OperatorConfig {
 		ReconcileTimeout:        5 * time.Minute,
 		DDNSNamespace:           "ddns-updater",
 		DDNSConfigMapName:       "ddns-updater-config",
+		IPv6ConfigMapName:       "cluster-config",
+		IPv6ConfigMapNamespace:  "flux-system",
+		IPv6SyncInterval:        5 * time.Minute,
+		IPv6Resolvers:           []string{"1.1.1.1:53", "9.9.9.9:53"},
 	}
 }
 

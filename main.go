@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"go.uber.org/zap/zapcore"
@@ -18,6 +20,7 @@ import (
 	connectivityv1alpha1 "github.com/fredericrous/homelab/ddns-updater-operator/api/v1alpha1"
 	"github.com/fredericrous/homelab/ddns-updater-operator/controllers"
 	"github.com/fredericrous/homelab/ddns-updater-operator/pkg/config"
+	"github.com/fredericrous/homelab/ddns-updater-operator/pkg/ipv6"
 )
 
 var (
@@ -46,6 +49,13 @@ func main() {
 		logLevel   = flag.String("zap-log-level", "info", "Zap log level (debug, info, warn, error)")
 		logDevel   = flag.Bool("zap-devel", false, "Enable development mode logging")
 		logEncoder = flag.String("zap-encoder", "json", "Zap log encoding (json or console)")
+
+		ipv6Enabled            = flag.Bool("ipv6-enabled", false, "Enable IPv6 auto-detection")
+		ipv6ConfigMapName      = flag.String("ipv6-configmap-name", "cluster-config", "Target ConfigMap name for IPv6 data")
+		ipv6ConfigMapNamespace = flag.String("ipv6-configmap-namespace", "flux-system", "Target ConfigMap namespace")
+		ipv6SyncInterval       = flag.Duration("ipv6-sync-interval", 5*time.Minute, "IPv6 check interval")
+		ipv6Resolvers          = flag.String("ipv6-resolvers", "1.1.1.1:53,9.9.9.9:53", "Comma-separated external DNS resolvers")
+		ipv6Overrides          = flag.String("ipv6-overrides", "", `JSON map of overrides: {"KEY":{"domain":"...","suffix":"..."}}`)
 	)
 
 	flag.Parse()
@@ -87,6 +97,23 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
+	// Parse IPv6 overrides from JSON
+	var parsedIPv6Overrides map[string]config.IPv6Override
+	if *ipv6Overrides != "" {
+		if err := json.Unmarshal([]byte(*ipv6Overrides), &parsedIPv6Overrides); err != nil {
+			setupLog.Error(err, "Failed to parse ipv6-overrides JSON")
+			os.Exit(1)
+		}
+	}
+
+	// Parse resolvers
+	var resolverList []string
+	for _, r := range strings.Split(*ipv6Resolvers, ",") {
+		if trimmed := strings.TrimSpace(r); trimmed != "" {
+			resolverList = append(resolverList, trimmed)
+		}
+	}
+
 	// Create configuration
 	cfg := &config.OperatorConfig{
 		MetricsAddr:             *metricsAddr,
@@ -97,6 +124,12 @@ func main() {
 		ReconcileTimeout:        *reconcileTimeout,
 		DDNSNamespace:           *ddnsNamespace,
 		DDNSConfigMapName:       *ddnsConfigMapName,
+		IPv6Enabled:             *ipv6Enabled,
+		IPv6ConfigMapName:       *ipv6ConfigMapName,
+		IPv6ConfigMapNamespace:  *ipv6ConfigMapNamespace,
+		IPv6SyncInterval:        *ipv6SyncInterval,
+		IPv6Resolvers:           resolverList,
+		IPv6Overrides:           parsedIPv6Overrides,
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -157,10 +190,23 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Register IPv6 syncer as a manager.Runnable (starts after cache sync)
+	if cfg.IPv6Enabled {
+		setupLog.Info("IPv6 auto-detection enabled",
+			"configMap", cfg.IPv6ConfigMapNamespace+"/"+cfg.IPv6ConfigMapName,
+			"syncInterval", cfg.IPv6SyncInterval,
+			"resolvers", cfg.IPv6Resolvers,
+		)
+		syncer := ipv6.NewSyncer(mgr.GetClient(), cfg, ctrl.Log)
+		if err := mgr.Add(syncer); err != nil {
+			setupLog.Error(err, "Failed to add IPv6 syncer")
+			os.Exit(1)
+		}
+	}
+
 	// Start the manager
 	setupLog.Info("Starting manager")
-	ctx := ctrl.SetupSignalHandler()
-	if err := mgr.Start(ctx); err != nil {
+	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		setupLog.Error(err, "Failed to run manager")
 		os.Exit(1)
 	}

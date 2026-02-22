@@ -61,3 +61,13 @@ rules:
       - get
       - list
       - update
+  {{- if .Values.config.ipv6.enabled }}
+  - apiGroups:
+      - kustomize.toolkit.fluxcd.io
+    resources:
+      - kustomizations
+    verbs:
+      - get
+      - list
+      - patch
+  {{- end }}

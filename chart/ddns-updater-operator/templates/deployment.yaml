@@ -44,6 +44,16 @@ spec:
             - --metrics-bind-address=0
             {{- end }}
             - --health-probe-bind-address=:{{ .Values.health.port }}
+            {{- if .Values.config.ipv6.enabled }}
+            - --ipv6-enabled=true
+            - --ipv6-configmap-name={{ .Values.config.ipv6.configMapName }}
+            - --ipv6-configmap-namespace={{ .Values.config.ipv6.configMapNamespace }}
+            - --ipv6-sync-interval={{ .Values.config.ipv6.syncInterval }}
+            - --ipv6-resolvers={{ .Values.config.ipv6.resolvers }}
+            {{- if .Values.config.ipv6.overrides }}
+            - --ipv6-overrides={{ .Values.config.ipv6.overrides | toJson }}
+            {{- end }}
+            {{- end }}
           ports:
             {{- if .Values.metrics.enabled }}
             - name: metrics

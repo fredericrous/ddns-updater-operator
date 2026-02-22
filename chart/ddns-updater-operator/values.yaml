@@ -63,6 +63,25 @@ config:
   # Maximum concurrent reconciles
   maxConcurrentReconciles: 1
 
+  # IPv6 auto-detection configuration
+  ipv6:
+    # Enable IPv6 prefix auto-detection from DDNSRecord annotations
+    enabled: false
+    # Target ConfigMap name for IPv6 data
+    configMapName: "cluster-config"
+    # Target ConfigMap namespace
+    configMapNamespace: "flux-system"
+    # How often to check for IPv6 prefix changes
+    syncInterval: "5m"
+    # External DNS resolvers (bypasses CoreDNS split-horizon)
+    resolvers: "1.1.1.1:53,9.9.9.9:53"
+    # Manual overrides (takes precedence over annotations)
+    overrides: {}
+    # overrides:
+    #   GATEWAY_IPV6:
+    #     domain: "home.daddyshome.fr"
+    #     suffix: "::166/64"
+
 # Metrics configuration
 metrics:
   enabled: true
