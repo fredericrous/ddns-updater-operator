@@ -183,6 +183,13 @@ spec:
                   sync
                 format: date-time
                 type: string
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the generation of the DDNSRecord spec that was
+                  last reconciled. If it matches metadata.generation, the spec has been
+                  fully processed and the controller can skip redundant work.
+                format: int64
+                type: integer
               ready:
                 description: Ready indicates if the record has been synced to the
                   ConfigMap

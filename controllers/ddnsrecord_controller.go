@@ -51,7 +51,12 @@ func (r *DDNSRecordReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&connectivityv1alpha1.DDNSRecord{}).
+		For(&connectivityv1alpha1.DDNSRecord{},
+			// Ignore status-only changes: Reconcile writes Status.LastSyncedAt=now
+			// on every DDNSRecord per reconcile, which otherwise cascades into N²
+			// re-reconciles through the default watch predicate.
+			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
+		).
 		// Watch Secrets for credential changes
 		Watches(
 			&corev1.Secret{},
@@ -110,12 +115,19 @@ func (r *DDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
-	// Update status for all DDNSRecords
+	// Update status for all DDNSRecords. Skip the write when nothing changed —
+	// ObservedGeneration acts as the "spec was processed" marker so the
+	// controller stays quiet at steady state instead of rewriting
+	// LastSyncedAt on every tick.
 	now := metav1.Now()
 	var statusUpdateErrors []error
 	for i := range recordList.Items {
 		record := &recordList.Items[i]
+		if record.Status.Ready && record.Status.ObservedGeneration == record.Generation {
+			continue
+		}
 		record.Status.Ready = true
+		record.Status.ObservedGeneration = record.Generation
 		record.Status.LastSyncedAt = &now
 		if err := r.Status().Update(ctx, record); err != nil {
 			log.Error(err, "Failed to update DDNSRecord status", "record", record.Name)
