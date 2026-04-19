@@ -32,22 +32,30 @@ type ipv6Server struct {
 	Suffix string // IPv6 suffix from DDNSRecord spec, e.g. "::166/64"
 }
 
+// Resolver is the narrow slice of *net.Resolver that Syncer uses.
+// Defined as an interface so tests can inject a fake.
+type Resolver interface {
+	LookupIP(ctx context.Context, network, host string) ([]net.IP, error)
+}
+
 // Syncer implements manager.Runnable for IPv6 auto-detection.
 // It periodically resolves AAAA records for annotated DDNSRecords and
 // updates the cluster-config ConfigMap with the current IPv6 addresses.
 type Syncer struct {
-	client client.Client
-	cfg    *config.OperatorConfig
-	log    logr.Logger
+	client   client.Client
+	cfg      *config.OperatorConfig
+	log      logr.Logger
+	resolver Resolver
 }
 
 // NewSyncer creates a new IPv6 Syncer. Register it with mgr.Add() so it
 // starts after the informer cache is synced and is managed by the controller-runtime.
 func NewSyncer(c client.Client, cfg *config.OperatorConfig, log logr.Logger) *Syncer {
 	return &Syncer{
-		client: c,
-		cfg:    cfg,
-		log:    log.WithName("ipv6-sync"),
+		client:   c,
+		cfg:      cfg,
+		log:      log.WithName("ipv6-sync"),
+		resolver: buildResolver(cfg.IPv6Resolvers),
 	}
 }
 
@@ -89,11 +97,10 @@ func (s *Syncer) syncOnce(ctx context.Context) {
 		return
 	}
 
-	resolver := buildResolver(s.cfg.IPv6Resolvers)
 	data := make(map[string]string)
 
 	for _, srv := range servers {
-		ip, err := resolveAAAA(ctx, resolver, srv.Domain, s.log)
+		ip, err := resolveAAAA(ctx, s.resolver, srv.Domain, s.log)
 		if err != nil {
 			s.log.Error(err, "Failed to resolve AAAA record", "domain", srv.Domain, "key", srv.Key)
 			continue
@@ -198,7 +205,7 @@ func buildResolver(resolvers []string) *net.Resolver {
 }
 
 // resolveAAAA resolves a domain's AAAA record using the given resolver.
-func resolveAAAA(ctx context.Context, resolver *net.Resolver, domain string, log logr.Logger) (net.IP, error) {
+func resolveAAAA(ctx context.Context, resolver Resolver, domain string, log logr.Logger) (net.IP, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
