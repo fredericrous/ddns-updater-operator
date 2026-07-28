@@ -6,6 +6,9 @@ on:
 
 env:
   GOLANGCI_LINT_VERSION: v2.4.0
+  # Pinned: gosec now fails the build, so an unpinned @latest would let any
+  # upstream release turn CI red without a change on our side.
+  GOSEC_VERSION: v2.28.0
 
 jobs:
   validate:
@@ -84,15 +87,19 @@ jobs:
       - name: Run gosec security scanner
         id: gosec
         run: |
-          go install github.com/securego/gosec/v2/cmd/gosec@latest
-          gosec -no-fail -fmt sarif -out gosec-results.sarif ./... || true
+          go install github.com/securego/gosec/v2/cmd/gosec@${{ env.GOSEC_VERSION }}
+          if ! gosec -fmt sarif -out gosec-results.sarif ./...; then
+            echo "gosec_failed=true" >> $GITHUB_OUTPUT
+          else
+            echo "gosec_failed=false" >> $GITHUB_OUTPUT
+          fi
           if [ ! -f gosec-results.sarif ]; then
             echo '{"version":"2.1.0","runs":[]}' > gosec-results.sarif
           fi
 
       - name: Upload gosec results
         uses: github/codeql-action/upload-sarif@v3
-        if: steps.gosec.outcome == 'success'
+        if: always()
         with:
           sarif_file: gosec-results.sarif
 
@@ -134,7 +141,7 @@ jobs:
           | Code Formatting | ${{ steps.fmt.outputs.formatting_needed == 'false' && 'Passed' || 'Failed' }} |
           | Go Vet | ${{ steps.vet.outputs.vet_failed == 'false' && 'Passed' || 'Failed' }} |
           | GolangCI-Lint | ${{ steps.lint.outputs.lint_failed != 'true' && 'Passed' || 'Failed' }} |
-          | Security Scan | Completed (check Security tab) |
+          | Security Scan (gosec) | ${{ steps.gosec.outputs.gosec_failed == 'false' && 'Passed' || 'Failed' }} |
           | Unit Tests | ${{ steps.unit_tests.outputs.unit_tests_passed == 'true' && 'Passed' || 'Failed' }} |
           | Code Coverage | ${COVERAGE:-N/A} |
 
@@ -187,6 +194,8 @@ jobs:
       - name: Fail if tests failed
         if: |
           steps.fmt.outputs.formatting_needed == 'true' ||
+          steps.lint.outputs.lint_failed == 'true' ||
           steps.vet.outputs.vet_failed == 'true' ||
+          steps.gosec.outputs.gosec_failed == 'true' ||
           steps.unit_tests.outputs.unit_tests_passed != 'true'
         run: exit 1
