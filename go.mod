@@ -1,6 +1,6 @@
 module github.com/fredericrous/homelab/ddns-updater-operator
 
-go 1.25.12
+go 1.25.13
 
 require (
 	github.com/go-logr/logr v1.4.3

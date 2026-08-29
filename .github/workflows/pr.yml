@@ -9,6 +9,10 @@ env:
   # Pinned: gosec now fails the build, so an unpinned @latest would let any
   # upstream release turn CI red without a change on our side.
   GOSEC_VERSION: v2.28.0
+  # Pinned for the same reason: govulncheck fails the build, so an unpinned
+  # @latest would let any upstream release turn CI red without a change on
+  # our side.
+  GOVULNCHECK_VERSION: v1.7.0
 
 jobs:
   validate:
@@ -22,6 +26,10 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Attestation check
+        id: attest
+        uses: fredericrous/attest@v1
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -105,7 +113,7 @@ jobs:
 
       - name: Check for vulnerabilities
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install golang.org/x/vuln/cmd/govulncheck@${{ env.GOVULNCHECK_VERSION }}
           govulncheck ./...
 
       - name: Install dependencies
@@ -115,6 +123,7 @@ jobs:
 
       - name: Run unit tests with coverage
         id: unit_tests
+        if: ${{ !contains(fromJSON(steps.attest.outputs.gates), 'pre-push-go-test') }}
         run: |
           export KUBEBUILDER_ASSETS="$(${GITHUB_WORKSPACE}/bin/setup-envtest use 1.29.0 --bin-dir ${GITHUB_WORKSPACE}/bin -p path)"
           if go test ./... -coverprofile=coverage.out -covermode=atomic -race; then
@@ -124,6 +133,7 @@ jobs:
           fi
 
       - name: Generate coverage report
+        if: ${{ !contains(fromJSON(steps.attest.outputs.gates), 'pre-push-go-test') }}
         run: |
           go tool cover -func=coverage.out > coverage-summary.txt
           COVERAGE=$(tail -1 coverage-summary.txt | awk '{print $NF}')
@@ -197,5 +207,5 @@ jobs:
           steps.lint.outputs.lint_failed == 'true' ||
           steps.vet.outputs.vet_failed == 'true' ||
           steps.gosec.outputs.gosec_failed == 'true' ||
-          steps.unit_tests.outputs.unit_tests_passed != 'true'
+          (steps.unit_tests.outcome != 'skipped' && steps.unit_tests.outputs.unit_tests_passed != 'true')
         run: exit 1
