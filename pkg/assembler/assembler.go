@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 
 	"github.com/go-logr/logr"
@@ -26,18 +27,23 @@ func NewAssembler(client client.Client, log logr.Logger) *Assembler {
 	return &Assembler{Client: client, Log: log}
 }
 
-// DDNSEntry represents a single entry in the ddns-updater config
-type DDNSEntry struct {
-	Provider    string `json:"provider"`
-	Domain      string `json:"domain"`
-	Host        string `json:"host"`
-	Mode        string `json:"mode,omitempty"`
-	IPVersion   string `json:"ip_version,omitempty"`
-	IPv6Suffix  string `json:"ipv6_suffix,omitempty"`
-	AppKey      string `json:"app_key,omitempty"`
-	AppSecret   string `json:"app_secret,omitempty"`
-	ConsumerKey string `json:"consumer_key,omitempty"`
-}
+// DDNSEntry is a single entry of the ddns-updater config. ddns-updater reads
+// the common fields below and hands the very same object to the provider,
+// which unmarshals its own settings from the remaining top-level keys — so an
+// entry is an open map rather than a fixed struct.
+type DDNSEntry map[string]any
+
+// Reserved keys of a ddns-updater config entry. They are derived from the
+// DDNSRecord spec fields and may not be set through spec.config/configFrom.
+const (
+	keyProvider   = "provider"
+	keyDomain     = "domain"
+	keyHost       = "host"
+	keyIPVersion  = "ip_version"
+	keyIPv6Suffix = "ipv6_suffix"
+)
+
+var reservedKeys = []string{keyProvider, keyDomain, keyHost, keyIPVersion, keyIPv6Suffix}
 
 // DDNSConfig represents the complete ddns-updater configuration
 type DDNSConfig struct {
@@ -65,18 +71,19 @@ func (a *Assembler) Assemble(ctx context.Context, records []connectivityv1alpha1
 		return cmp.Compare(a.Spec.Host, b.Spec.Host)
 	})
 
-	// Group records by credential reference to minimize secret lookups
-	credCache := make(map[string]*corev1.Secret)
+	// Cache resolved Secrets so records sharing credentials cost one lookup
+	secretCache := make(map[string]*corev1.Secret)
 
-	for _, record := range sortedRecords {
-		entries, err := a.buildEntries(ctx, &record, credCache)
+	for i := range sortedRecords {
+		entries, err := a.buildEntries(ctx, &sortedRecords[i], secretCache)
 		if err != nil {
 			return nil, err
 		}
 		result.Entries = append(result.Entries, entries...)
 	}
 
-	// Build JSON config
+	// Build JSON config. Map keys marshal in sorted order, so the output is
+	// stable across reconciles and the config hash only moves on real changes.
 	config := DDNSConfig{Settings: result.Entries}
 	jsonBytes, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
@@ -92,21 +99,18 @@ func (a *Assembler) Assemble(ctx context.Context, records []connectivityv1alpha1
 func (a *Assembler) buildEntries(
 	ctx context.Context,
 	record *connectivityv1alpha1.DDNSRecord,
-	credCache map[string]*corev1.Secret,
+	secretCache map[string]*corev1.Secret,
 ) ([]DDNSEntry, error) {
 	spec := &record.Spec
 
-	// Resolve credentials based on provider
-	var creds *OVHCredentials
-	if spec.Provider == "ovh" {
-		var err error
-		creds, err = a.resolveOVHCredentials(ctx, record, credCache)
-		if err != nil {
-			return nil, err
-		}
+	// Provider-specific settings, shared by every entry this record produces
+	providerSettings, err := a.resolveProviderSettings(ctx, record, secretCache)
+	if err != nil {
+		return nil, err
 	}
 
-	// Determine which IP versions to create entries for
+	// ipv4_and_ipv6 is an operator-level convenience: ddns-updater cannot
+	// express both families in one entry, so it becomes two.
 	ipVersions := []string{cmp.Or(spec.IPVersion, "ipv4")}
 	if spec.IPVersion == "ipv4_and_ipv6" {
 		ipVersions = []string{"ipv4", "ipv6"}
@@ -115,22 +119,19 @@ func (a *Assembler) buildEntries(
 	entries := make([]DDNSEntry, 0, len(ipVersions))
 	for _, ipVersion := range ipVersions {
 		entry := DDNSEntry{
-			Provider:  spec.Provider,
-			Domain:    spec.Domain,
-			Host:      spec.Host,
-			Mode:      cmp.Or(spec.ProviderConfig.Mode, "api"),
-			IPVersion: ipVersion,
+			keyProvider:  spec.Provider,
+			keyDomain:    spec.Domain,
+			keyHost:      spec.Host,
+			keyIPVersion: ddnsIPVersion(ipVersion),
 		}
 
 		// Add IPv6 suffix for IPv6 entries if specified
-		if ipVersion == "ipv6" && spec.IPv6Suffix != "" {
-			entry.IPv6Suffix = spec.IPv6Suffix
+		if spec.IPv6Suffix != "" && (ipVersion == "ipv6" || ipVersion == "ipv4_or_ipv6") {
+			entry[keyIPv6Suffix] = spec.IPv6Suffix
 		}
 
-		if creds != nil {
-			entry.AppKey = creds.AppKey
-			entry.AppSecret = creds.AppSecret
-			entry.ConsumerKey = creds.ConsumerKey
+		for k, v := range providerSettings {
+			entry[k] = v
 		}
 
 		entries = append(entries, entry)
@@ -139,61 +140,102 @@ func (a *Assembler) buildEntries(
 	return entries, nil
 }
 
-// OVHCredentials holds resolved OVH credentials
-type OVHCredentials struct {
-	AppKey      string
-	AppSecret   string
-	ConsumerKey string
+// ddnsIPVersion translates the CRD's ipVersion vocabulary into the values
+// ddns-updater's ipversion.Parse accepts. Everything but the "or" form is
+// already spelled the way upstream wants it.
+func ddnsIPVersion(ipVersion string) string {
+	if ipVersion == "ipv4_or_ipv6" {
+		return "ipv4 or ipv6"
+	}
+	return ipVersion
 }
 
-// resolveOVHCredentials resolves OVH credentials from the referenced secret
-func (a *Assembler) resolveOVHCredentials(
+// resolveProviderSettings merges spec.config with the Secret values named by
+// spec.configFrom into the flat key/value set ddns-updater hands to the
+// provider.
+func (a *Assembler) resolveProviderSettings(
 	ctx context.Context,
 	record *connectivityv1alpha1.DDNSRecord,
-	credCache map[string]*corev1.Secret,
-) (*OVHCredentials, error) {
-	ref := &record.Spec.ProviderConfig.CredentialsRef
+	secretCache map[string]*corev1.Secret,
+) (map[string]any, error) {
+	spec := &record.Spec
+	settings := make(map[string]any, len(spec.Config)+len(spec.ConfigFrom))
+
+	for key, raw := range spec.Config {
+		if err := checkSettingKey(record, key); err != nil {
+			return nil, err
+		}
+		var value any
+		if err := json.Unmarshal(raw.Raw, &value); err != nil {
+			return nil, operrors.NewConfigError(
+				fmt.Sprintf("config value for %q is not valid JSON", key), err).
+				WithContext("record", record.Namespace+"/"+record.Name)
+		}
+		settings[key] = value
+	}
+
+	for i := range spec.ConfigFrom {
+		src := &spec.ConfigFrom[i]
+		if err := checkSettingKey(record, src.Name); err != nil {
+			return nil, err
+		}
+		if _, exists := settings[src.Name]; exists {
+			return nil, operrors.NewConfigError(
+				fmt.Sprintf("setting %q is set by both config and configFrom", src.Name), nil).
+				WithContext("record", record.Namespace+"/"+record.Name)
+		}
+
+		value, err := a.resolveSecretValue(ctx, record, &src.SecretKeyRef, secretCache)
+		if err != nil {
+			return nil, err
+		}
+		settings[src.Name] = value
+	}
+
+	return settings, nil
+}
+
+// checkSettingKey rejects provider settings that would overwrite a field the
+// spec already owns.
+func checkSettingKey(record *connectivityv1alpha1.DDNSRecord, key string) error {
+	if !slices.Contains(reservedKeys, key) {
+		return nil
+	}
+	return operrors.NewConfigError(
+		fmt.Sprintf("setting %q is reserved and must be set through the DDNSRecord spec", key), nil).
+		WithContext("record", record.Namespace+"/"+record.Name)
+}
+
+// resolveSecretValue reads one key out of the referenced Secret.
+func (a *Assembler) resolveSecretValue(
+	ctx context.Context,
+	record *connectivityv1alpha1.DDNSRecord,
+	ref *connectivityv1alpha1.SecretKeySelector,
+	secretCache map[string]*corev1.Secret,
+) (string, error) {
 	namespace := cmp.Or(ref.Namespace, record.Namespace)
 	cacheKey := namespace + "/" + ref.Name
 
-	// Check cache first
-	secret, ok := credCache[cacheKey]
+	secret, ok := secretCache[cacheKey]
 	if !ok {
 		secret = &corev1.Secret{}
 		if err := a.Client.Get(ctx, types.NamespacedName{Name: ref.Name, Namespace: namespace}, secret); err != nil {
-			return nil, operrors.NewTransientError("failed to get credentials secret", err).
+			return "", operrors.NewTransientError("failed to get credentials secret", err).
 				WithContext("secretName", ref.Name).
 				WithContext("namespace", namespace).
 				WithContext("record", record.Namespace+"/"+record.Name)
 		}
-		credCache[cacheKey] = secret
+		secretCache[cacheKey] = secret
 	}
 
-	// Extract credentials
-	appKey := string(secret.Data["OVH_APPLICATION_KEY"])
-	if appKey == "" {
-		return nil, operrors.NewConfigError("OVH_APPLICATION_KEY not found in secret", nil).
+	value, ok := secret.Data[ref.Key]
+	if !ok || len(value) == 0 {
+		return "", operrors.NewConfigError(
+			fmt.Sprintf("key %q not found in secret", ref.Key), nil).
 			WithContext("secretName", ref.Name).
-			WithContext("namespace", namespace)
+			WithContext("namespace", namespace).
+			WithContext("record", record.Namespace+"/"+record.Name)
 	}
 
-	appSecret := string(secret.Data["OVH_APPLICATION_SECRET"])
-	if appSecret == "" {
-		return nil, operrors.NewConfigError("OVH_APPLICATION_SECRET not found in secret", nil).
-			WithContext("secretName", ref.Name).
-			WithContext("namespace", namespace)
-	}
-
-	consumerKey := string(secret.Data["OVH_CONSUMER_KEY"])
-	if consumerKey == "" {
-		return nil, operrors.NewConfigError("OVH_CONSUMER_KEY not found in secret", nil).
-			WithContext("secretName", ref.Name).
-			WithContext("namespace", namespace)
-	}
-
-	return &OVHCredentials{
-		AppKey:      appKey,
-		AppSecret:   appSecret,
-		ConsumerKey: consumerKey,
-	}, nil
+	return string(value), nil
 }

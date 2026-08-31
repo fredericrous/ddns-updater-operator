@@ -63,8 +63,8 @@ var _ = BeforeSuite(func() {
 	})).To(Succeed())
 
 	// OVH credentials Secret referenced by every test DDNSRecord's
-	// providerConfig.credentialsRef. Without it the assembler would skip
-	// the record and we'd never see ObservedGeneration advance.
+	// configFrom. Without it the assembler fails and we'd never see
+	// ObservedGeneration advance.
 	Expect(k8sClient.Create(ctx, &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "ovh-creds",

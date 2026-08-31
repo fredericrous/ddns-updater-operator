@@ -1,18 +1,23 @@
 package v1alpha1
 
 import (
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // DDNSRecordSpec defines the desired state of DDNSRecord
 type DDNSRecordSpec struct {
-	// Provider is the DDNS provider (currently only OVH supported)
+	// Provider is the ddns-updater provider name, e.g. "ovh", "cloudflare",
+	// "duckdns". Any provider supported by the running ddns-updater is
+	// accepted: the operator passes the name through verbatim rather than
+	// validating it against a built-in list, so a provider added upstream
+	// works without an operator release. An unrecognised name is reported as
+	// a warning Event, not a rejection.
 	// +kubebuilder:validation:Required
-	// +kubebuilder:default="ovh"
-	// +kubebuilder:validation:Enum=ovh
+	// +kubebuilder:validation:Pattern=`^[a-z0-9][a-z0-9._-]*$`
 	Provider string `json:"provider"`
 
-	// Domain is the base domain (e.g., daddyshome.fr)
+	// Domain is the base domain (e.g., example.com)
 	// +kubebuilder:validation:Required
 	Domain string `json:"domain"`
 
@@ -33,28 +38,50 @@ type DDNSRecordSpec struct {
 	// +optional
 	IPv6Suffix string `json:"ipv6Suffix,omitempty"`
 
-	// ProviderConfig contains provider-specific settings
-	// +kubebuilder:validation:Required
-	ProviderConfig OVHProviderConfig `json:"providerConfig"`
+	// Config holds the provider-specific settings, merged verbatim into the
+	// ddns-updater config entry. Keys and value types are whatever the
+	// provider documents (see the ddns-updater docs/ directory), e.g.
+	// {"zone_identifier": "abc", "proxied": true, "ttl": 300}.
+	//
+	// Never put credentials here — the whole entry lands in a ConfigMap.
+	// Use configFrom for anything secret.
+	//
+	// The reserved keys provider, domain, host, ip_version and ipv6_suffix
+	// are owned by the fields above and rejected here.
+	// +optional
+	Config map[string]apiextensionsv1.JSON `json:"config,omitempty"`
+
+	// ConfigFrom injects provider settings from Secrets. Each item sets one
+	// key of the ddns-updater config entry to the value of a Secret key, so
+	// credentials never appear in the DDNSRecord itself.
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	ConfigFrom []ConfigFromSource `json:"configFrom,omitempty"`
 }
 
-// OVHProviderConfig contains OVH-specific configuration
-type OVHProviderConfig struct {
-	// Mode is the OVH API mode
-	// +kubebuilder:default="api"
-	Mode string `json:"mode,omitempty"`
-
-	// CredentialsRef references the secret containing OVH credentials
-	// Secret must contain: OVH_APPLICATION_KEY, OVH_APPLICATION_SECRET, OVH_CONSUMER_KEY
+// ConfigFromSource maps a Secret key onto one provider setting
+type ConfigFromSource struct {
+	// Name is the key to set in the ddns-updater config entry, e.g.
+	// "token", "app_key", "password".
 	// +kubebuilder:validation:Required
-	CredentialsRef SecretReference `json:"credentialsRef"`
+	// +kubebuilder:validation:Pattern=`^[a-z0-9][a-z0-9._-]*$`
+	Name string `json:"name"`
+
+	// SecretKeyRef selects the Secret key holding the value
+	// +kubebuilder:validation:Required
+	SecretKeyRef SecretKeySelector `json:"secretKeyRef"`
 }
 
-// SecretReference references a secret in a namespace
-type SecretReference struct {
+// SecretKeySelector selects a single key of a Secret
+type SecretKeySelector struct {
 	// Name of the secret
 	// +kubebuilder:validation:Required
 	Name string `json:"name"`
+
+	// Key within the secret's data
+	// +kubebuilder:validation:Required
+	Key string `json:"key"`
 
 	// Namespace of the secret (defaults to the DDNSRecord namespace)
 	// +optional

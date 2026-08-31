@@ -99,6 +99,8 @@ func (r *DDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, nil
 	}
 
+	r.warnOnUnknownProviders(recordList.Items)
+
 	// Assemble the configuration
 	result, err := r.Assembler.Assemble(ctx, recordList.Items)
 	if err != nil {
@@ -234,21 +236,15 @@ func (r *DDNSRecordReconciler) enqueueRequestsForSecret() handler.EventHandler {
 
 		var requests []reconcile.Request
 		for _, record := range recordList.Items {
-			// Check if this DDNSRecord references the Secret
-			ref := &record.Spec.ProviderConfig.CredentialsRef
-			namespace := ref.Namespace
-			if namespace == "" {
-				namespace = record.Namespace
+			if !recordUsesSecret(&record, secret) {
+				continue
 			}
-
-			if secret.Name == ref.Name && secret.Namespace == namespace {
-				requests = append(requests, reconcile.Request{
-					NamespacedName: types.NamespacedName{
-						Name:      record.Name,
-						Namespace: record.Namespace,
-					},
-				})
-			}
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      record.Name,
+					Namespace: record.Namespace,
+				},
+			})
 		}
 
 		if len(requests) > 0 {
@@ -259,6 +255,43 @@ func (r *DDNSRecordReconciler) enqueueRequestsForSecret() handler.EventHandler {
 
 		return requests
 	})
+}
+
+// recordUsesSecret reports whether any of the record's configFrom sources
+// reads from the given Secret.
+// warnOnUnknownProviders surfaces provider names the operator has not seen
+// upstream. It never blocks assembly — ddns-updater is the authority on which
+// providers exist — but a typo would otherwise only show up as a crash loop in
+// ddns-updater. Restricted to records whose spec has not been observed yet, so
+// a steady-state cluster does not re-emit the same Event every reconcile.
+func (r *DDNSRecordReconciler) warnOnUnknownProviders(records []connectivityv1alpha1.DDNSRecord) {
+	for i := range records {
+		record := &records[i]
+		if record.Status.ObservedGeneration == record.Generation {
+			continue
+		}
+		if assembler.IsKnownProvider(record.Spec.Provider) {
+			continue
+		}
+		r.Recorder.Eventf(record, corev1.EventTypeWarning, "UnknownProvider",
+			"Provider %q is not in this operator's list of known ddns-updater providers; "+
+				"it is passed through unchanged, but check the spelling if ddns-updater rejects the config",
+			record.Spec.Provider)
+	}
+}
+
+func recordUsesSecret(record *connectivityv1alpha1.DDNSRecord, secret *corev1.Secret) bool {
+	for i := range record.Spec.ConfigFrom {
+		ref := &record.Spec.ConfigFrom[i].SecretKeyRef
+		namespace := ref.Namespace
+		if namespace == "" {
+			namespace = record.Namespace
+		}
+		if secret.Name == ref.Name && secret.Namespace == namespace {
+			return true
+		}
+	}
+	return false
 }
 
 func generateTraceID() string {
