@@ -1,0 +1,70 @@
+# Example DDNSRecords, one per provider style. The fields under spec.config /
+# spec.configFrom are whatever the provider documents in the ddns-updater
+# repository (docs/<provider>.md) — the operator passes them through verbatim,
+# so any provider ddns-updater supports works without an operator change.
+---
+# OVH, API mode: three credentials, all from a Secret.
+apiVersion: connectivity.homelab.io/v1alpha1
+kind: DDNSRecord
+metadata:
+  name: home-ovh
+  namespace: ddns-updater
+spec:
+  provider: ovh
+  domain: example.com
+  host: home
+  ipVersion: ipv4_and_ipv6
+  ipv6Suffix: "::166/64"
+  config:
+    mode: api
+  configFrom:
+    - name: app_key
+      secretKeyRef:
+        name: ovh-credentials
+        key: OVH_APPLICATION_KEY
+    - name: app_secret
+      secretKeyRef:
+        name: ovh-credentials
+        key: OVH_APPLICATION_SECRET
+    - name: consumer_key
+      secretKeyRef:
+        name: ovh-credentials
+        key: OVH_CONSUMER_KEY
+---
+# Cloudflare: a mix of plain settings (including non-string types) and one token.
+apiVersion: connectivity.homelab.io/v1alpha1
+kind: DDNSRecord
+metadata:
+  name: www-cloudflare
+  namespace: ddns-updater
+spec:
+  provider: cloudflare
+  domain: example.org
+  host: www
+  ipVersion: ipv4
+  config:
+    zone_identifier: 0123456789abcdef0123456789abcdef
+    proxied: true
+    ttl: 300
+  configFrom:
+    - name: token
+      secretKeyRef:
+        name: cloudflare-credentials
+        key: CF_API_TOKEN
+---
+# DuckDNS: a single token, no plain settings at all.
+apiVersion: connectivity.homelab.io/v1alpha1
+kind: DDNSRecord
+metadata:
+  name: duck
+  namespace: ddns-updater
+spec:
+  provider: duckdns
+  domain: example.duckdns.org
+  host: "@"
+  ipVersion: ipv4_or_ipv6
+  configFrom:
+    - name: token
+      secretKeyRef:
+        name: duckdns-credentials
+        key: DUCKDNS_TOKEN

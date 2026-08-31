@@ -57,8 +57,64 @@ spec:
           spec:
             description: DDNSRecordSpec defines the desired state of DDNSRecord
             properties:
+              config:
+                additionalProperties:
+                  x-kubernetes-preserve-unknown-fields: true
+                description: |-
+                  Config holds the provider-specific settings, merged verbatim into the
+                  ddns-updater config entry. Keys and value types are whatever the
+                  provider documents (see the ddns-updater docs/ directory), e.g.
+                  {"zone_identifier": "abc", "proxied": true, "ttl": 300}.
+
+                  Never put credentials here — the whole entry lands in a ConfigMap.
+                  Use configFrom for anything secret.
+
+                  The reserved keys provider, domain, host, ip_version and ipv6_suffix
+                  are owned by the fields above and rejected here.
+                type: object
+              configFrom:
+                description: |-
+                  ConfigFrom injects provider settings from Secrets. Each item sets one
+                  key of the ddns-updater config entry to the value of a Secret key, so
+                  credentials never appear in the DDNSRecord itself.
+                items:
+                  description: ConfigFromSource maps a Secret key onto one provider
+                    setting
+                  properties:
+                    name:
+                      description: |-
+                        Name is the key to set in the ddns-updater config entry, e.g.
+                        "token", "app_key", "password".
+                      pattern: ^[a-z0-9][a-z0-9._-]*$
+                      type: string
+                    secretKeyRef:
+                      description: SecretKeyRef selects the Secret key holding the
+                        value
+                      properties:
+                        key:
+                          description: Key within the secret's data
+                          type: string
+                        name:
+                          description: Name of the secret
+                          type: string
+                        namespace:
+                          description: Namespace of the secret (defaults to the DDNSRecord
+                            namespace)
+                          type: string
+                      required:
+                      - key
+                      - name
+                      type: object
+                  required:
+                  - name
+                  - secretKeyRef
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               domain:
-                description: Domain is the base domain (e.g., daddyshome.fr)
+                description: Domain is the base domain (e.g., example.com)
                 type: string
               host:
                 description: Host is the subdomain or @ for root
@@ -82,41 +138,19 @@ spec:
                   If empty, the raw public IPv6 address obtained is used.
                 type: string
               provider:
-                default: ovh
-                description: Provider is the DDNS provider (currently only OVH supported)
-                enum:
-                - ovh
+                description: |-
+                  Provider is the ddns-updater provider name, e.g. "ovh", "cloudflare",
+                  "duckdns". Any provider supported by the running ddns-updater is
+                  accepted: the operator passes the name through verbatim rather than
+                  validating it against a built-in list, so a provider added upstream
+                  works without an operator release. An unrecognised name is reported as
+                  a warning Event, not a rejection.
+                pattern: ^[a-z0-9][a-z0-9._-]*$
                 type: string
-              providerConfig:
-                description: ProviderConfig contains provider-specific settings
-                properties:
-                  credentialsRef:
-                    description: |-
-                      CredentialsRef references the secret containing OVH credentials
-                      Secret must contain: OVH_APPLICATION_KEY, OVH_APPLICATION_SECRET, OVH_CONSUMER_KEY
-                    properties:
-                      name:
-                        description: Name of the secret
-                        type: string
-                      namespace:
-                        description: Namespace of the secret (defaults to the DDNSRecord
-                          namespace)
-                        type: string
-                    required:
-                    - name
-                    type: object
-                  mode:
-                    default: api
-                    description: Mode is the OVH API mode
-                    type: string
-                required:
-                - credentialsRef
-                type: object
             required:
             - domain
             - host
             - provider
-            - providerConfig
             type: object
           status:
             description: DDNSRecordStatus defines the observed state of DDNSRecord
@@ -183,6 +217,13 @@ spec:
                   sync
                 format: date-time
                 type: string
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the generation of the DDNSRecord spec that was
+                  last reconciled. If it matches metadata.generation, the spec has been
+                  fully processed and the controller can skip redundant work.
+                format: int64
+                type: integer
               ready:
                 description: Ready indicates if the record has been synced to the
                   ConfigMap

@@ -28,13 +28,14 @@ var _ = Describe("DDNSRecord controller", func() {
 				Domain:    "example.test",
 				Host:      host,
 				IPVersion: "ipv4",
-				ProviderConfig: connectivityv1alpha1.OVHProviderConfig{
-					Mode: "api",
-					CredentialsRef: connectivityv1alpha1.SecretReference{
+				ConfigFrom: []connectivityv1alpha1.ConfigFromSource{{
+					Name: "app_key",
+					SecretKeyRef: connectivityv1alpha1.SecretKeySelector{
 						Name:      "ovh-creds",
 						Namespace: "default",
+						Key:       "OVH_APPLICATION_KEY",
 					},
-				},
+				}},
 			},
 		}
 	}
