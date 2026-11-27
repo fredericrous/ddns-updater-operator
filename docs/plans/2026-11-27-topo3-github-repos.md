@@ -1,7 +1,7 @@
 ---
 canonical: decisions:docs/plans/2026-11-27-topo3-github-repos.md
 phases: [3]
-status: active
+status: done
 branch: chore/t25-topo3
 repos: [ddns-updater-operator]
 ---
@@ -14,3 +14,6 @@ script.
 
 ## Code review
 - ddns-updater-operator: none — CI pin, re-vendored pack, regenerated hook and gate block, one comment, no code
+
+## Implementation review
+- implementation-review (opus): approve (46k, 30 s): low, tick Phase 3 at close.
